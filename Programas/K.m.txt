@@ -1,13 +1,21 @@
-% Lista de archivos originales
-archivos = {'datosTemperaturas.csv', 'datosTemperaturas3metal.csv', 'datosTemperaturas4metal.csv'};
+% Lista de archivos
+archivos = {'datosTemperaturas1.csv', 'datosTemperaturas2.csv', ...
+            'datosTemperaturas3a.csv', 'datosTemperaturas4.csv'};
 
 k_vals = [];
 Ta_total = [];
 T0_list = [];
 k_por_archivo = {};
 
+Y_all = [];
+t_all = [];
+
+fprintf('==== Resultados por archivo ====\n');
+
 for i = 1:length(archivos)
     data = readtable(archivos{i});
+    
+    % Leer columnas
     if any(strcmp(data.Properties.VariableNames, 'Tiempo'))
         t = data.Tiempo * 3.5;
         T = data.TempLiquido;
@@ -18,19 +26,18 @@ for i = 1:length(archivos)
         Ta = mean(str2double(data{:,2}));
     end
 
-    % Eliminar primeros 100 segundos (para evitar puntos perturbadores iniciales)
-    idx = t >= 100;
-    t = t(idx);
-    T = T(idx);
-
-    % Asegurar que haya suficientes datos
-    if length(t) < 4
+    % Buscar desde que T <= 85 °C
+    idx_inicio = find(T <= 85, 1, 'first');
+    if isempty(idx_inicio) || length(t) - idx_inicio < 4
+        fprintf('Archivo %s omitido por falta de datos válidos.\n', archivos{i});
         continue;
     end
 
-    T0 = T(1);
-    Y = log((T - Ta) / (T0 - Ta));
-    p = polyfit(t, Y, 1);
+    t_filtrado = t(idx_inicio:end);
+    T_filtrado = T(idx_inicio:end);
+    T0 = T_filtrado(1);
+    Y = log((T_filtrado - Ta) / (T0 - Ta));
+    p = polyfit(t_filtrado, Y, 1);
     k = -p(1);
 
     if k > 0 && k < 0.05
@@ -38,12 +45,15 @@ for i = 1:length(archivos)
         Ta_total(end+1) = Ta;
         T0_list(end+1) = T0;
         k_por_archivo{end+1} = archivos{i};
-    end
-end
 
-% Verificar
-if length(k_vals) < 2
-    error('No hay suficientes datos válidos para calcular k promedio.');
+        % Acumular para gráfica
+        t_all = [t_all; t_filtrado];
+        Y_all = [Y_all; Y];
+
+        % Mostrar por archivo
+        fprintf('Archivo: %-25s | T₀ = %.2f °C | Tₐ = %.2f °C | k = %.5f 1/s\n', ...
+            archivos{i}, T0, Ta, k);
+    end
 end
 
 % Promedios
@@ -51,63 +61,31 @@ k_prom = mean(k_vals);
 Ta_prom = mean(Ta_total);
 T0_prom = mean(T0_list);
 
-% ======= GRAFICA 1: T vs tiempo =======
+fprintf('\n==== Promedios finales ====\n');
+fprintf('T₀ promedio = %.2f °C\n', T0_prom);
+fprintf('Tₐ promedio = %.2f °C\n', Ta_prom);
+fprintf('k promedio  = %.5f 1/s\n', k_prom);
+
+% Modelo con k promedio
 t_modelo = linspace(0, 5000, 200);
 T_modelo = Ta_prom + (T0_prom - Ta_prom) * exp(-k_prom * t_modelo);
 
-figure(1);
-plot(t_modelo, T_modelo, 'b-', 'LineWidth', 2);
+% ===== Gráfica 1: Curva de enfriamiento =====
+figure(1); clf;
+plot(t_modelo, T_modelo, 'r-', 'LineWidth', 2, 'DisplayName', 'Modelo promedio');
 xlabel('Tiempo (s)');
 ylabel('Temperatura (°C)');
 title(sprintf('Curva de enfriamiento con k_{prom} = %.5f 1/s', k_prom));
-grid on;
-
-fprintf('\nT0 promedio = %.2f °C, Ta promedio = %.2f °C\n', T0_prom, Ta_prom);
-
-% ======= GRAFICA 2: ln((T-Ta)/(T0-Ta)) vs tiempo =======
-Y_all = [];
-t_all = [];
-
-for i = 1:length(k_por_archivo)
-    data = readtable(k_por_archivo{i});
-    if any(strcmp(data.Properties.VariableNames, 'Tiempo'))
-        t = data.Tiempo * 3.5;
-        T = data.TempLiquido;
-        Ta = mean(data.TempAmbiente);
-    else
-        t = str2double(data{:,1}) * 3.5;
-        T = str2double(data{:,3});
-        Ta = mean(str2double(data{:,2}));
-    end
-
-    % Eliminar primeros 100 segundos (mismo filtro)
-    idx = t >= 100;
-    t = t(idx);
-    T = T(idx);
-
-    if length(t) < 4
-        continue;
-    end
-
-    T0 = T(1);
-    Y = log((T - Ta) / (T0 - Ta));
-
-    t_all = [t_all; t];
-    Y_all = [Y_all; Y];
-end
-
-figure(2);
-plot(t_all, Y_all, 'bo', 'DisplayName', 'Datos linealizados'); hold on;
-plot(t_modelo, -k_prom * t_modelo, 'r-', 'LineWidth', 2, 'DisplayName', 'Ajuste recta');
-xlabel('Tiempo (s)');
-ylabel('ln((T - Ta)/(T0 - Ta))');
-title('Linealización de Newton con datos filtrados');
 legend('Location', 'best');
 grid on;
 
-% ======= MOSTRAR RESULTADOS =======
-fprintf('\nValores de k por archivo:\n');
-for i = 1:length(k_vals)
-    fprintf('Archivo: %-20s --> k = %.5f 1/s\n', k_por_archivo{i}, k_vals(i));
-end
-fprintf('Constante k promedio final = %.5f 1/s\n', k_prom);
+% ===== Gráfica 2: Linealización =====
+figure(2); clf;
+plot(t_all, Y_all, 'bo', 'DisplayName', 'Datos linealizados');
+hold on;
+plot(t_modelo, -k_prom * t_modelo, 'r-', 'LineWidth', 2, 'DisplayName', 'Ajuste promedio');
+xlabel('Tiempo (s)');
+ylabel('ln((T - Ta)/(T0 - Ta))');
+title('Linealización de Newton desde T ≤ 85 °C (todos los archivos)');
+legend('Location', 'best');
+grid on;
